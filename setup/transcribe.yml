@@ -1,0 +1,107 @@
+name: 小宇宙播客转逐字稿
+
+on:
+  # 方式一: 网页端手动触发 —— Actions 页面点 "Run workflow" 填入链接
+  workflow_dispatch:
+    inputs:
+      url:
+        description: '小宇宙节目链接 (https://www.xiaoyuzhoufm.com/episode/...)'
+        required: true
+        type: string
+      model:
+        description: 'Whisper 模型 (base 推荐; small 更准但慢一倍)'
+        required: true
+        default: 'base'
+        type: choice
+        options:
+          - base
+          - small
+          - tiny
+      beam:
+        description: 'beam_size: 1=极速 2=均衡 5=保守'
+        required: true
+        default: '2'
+        type: choice
+        options:
+          - '2'
+          - '1'
+          - '5'
+  # 方式二: 开一个 Issue, 正文中贴小宇宙链接即可自动触发
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write   # 用于把逐字稿提交回仓库 transcripts/ 目录
+  issues: write     # 用于在 Issue 下评论回传结果
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install -r requirements.txt
+
+      - name: 确定小宇宙链接
+        id: link
+        env:
+          INPUT_URL: ${{ github.event.inputs.url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          if [ -n "$INPUT_URL" ]; then
+            URL="$INPUT_URL"
+          else
+            URL=$(echo "$ISSUE_BODY" | grep -oE 'https?://[^ )>]*xiaoyuzhoufm\.com/[^ )>]+' | head -1)
+          fi
+          if [ -z "$URL" ]; then
+            echo "::error::未找到小宇宙链接，请检查输入"
+            exit 1
+          fi
+          echo "链接: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: 下载并转录
+        id: run
+        run: |
+          python scripts/transcribe.py "${{ steps.link.outputs.url }}" output \
+            --model ${{ github.event.inputs.model || 'base' }} \
+            --beam ${{ github.event.inputs.beam || '2' }}
+
+      - name: 上传逐字稿 (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcription-${{ github.run_number }}
+          path: output/transcription.txt
+          retention-days: 30
+
+      - name: 提交逐字稿到 transcripts/ 目录
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p transcripts
+          FILENAME="transcripts/$(date +%Y%m%d-%H%M%S)-run${{ github.run_number }}.txt"
+          cp output/transcription.txt "$FILENAME"
+          git add transcripts/
+          git commit -m "transcript: ${{ steps.run.outputs.episode_title || steps.link.outputs.url }}"
+          git push
+          echo "file=$FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Issue 评论回传结果
+        if: github.event_name == 'issues'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '✅ 转录完成！\n\n逐字稿已提交到仓库: [`${{ steps.commit.outputs.file }}`](https://github.com/${{ github.repository }}/blob/main/${{ steps.commit.outputs.file }})\n\n也可以在 [本次运行记录](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) 中下载 artifact。'
+            });
