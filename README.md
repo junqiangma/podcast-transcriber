@@ -2,6 +2,10 @@
 
 给小宇宙播客链接，自动还你一份带时间戳的完整逐字稿。**全程在 GitHub 网页端操作，无需安装任何东西。**
 
+## ⚡ 首次使用：一次性设置（约 30 秒）
+
+由于 GitHub 安全限制，工作流文件需要先手动就位一次：打开 [`setup/transcribe.yml`](setup/transcribe.yml)，按该目录下的说明，把文件重命名移动到 `.github/workflows/transcribe.yml` 并提交即可。之后永久可用。
+
 ## 使用方法（二选一）
 
 ### 方式一：Actions 手动触发（推荐）
