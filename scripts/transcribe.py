@@ -19,6 +19,10 @@ import threading
 
 CHUNK_SECONDS = 900  # 15分钟/段
 
+# v1.1 修复: 部分播客(如声东击西)的音频是 .mp3 而非 .m4a,
+# 旧正则只匹配 .m4a 导致解析失败。统一匹配两种扩展名(非贪婪, 避免查询串干扰)。
+AUDIO_URL_RE = r'https://media\.xyzcdn\.net/[^"\s\\]+?\.(?:m4a|mp3)'
+
 # GitHub Actions 海外 runner 直连 HuggingFace 即可;
 # 国内本地运行时取消下一行注释使用镜像:
 # os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
@@ -34,7 +38,7 @@ def fetch_episode_page(xiaoyuzhou_url):
     html = resp.text
 
     audio_url = None
-    match = re.search(r'https://media\.xyzcdn\.net/[^"\s\\]+\.m4a', html)
+    match = re.search(AUDIO_URL_RE, html)
     if match:
         audio_url = match.group(0)
 
@@ -66,7 +70,7 @@ def resolve_audio_url(xiaoyuzhou_url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     parse_url = "https://xyzdownloader.xyz/zh-CN?q={}".format(quote(xiaoyuzhou_url, safe=''))
     resp = requests.get(parse_url, headers=headers, timeout=30)
-    match = re.search(r'https://media\.xyzcdn\.net/[^"\s\\]+\.m4a', resp.text)
+    match = re.search(AUDIO_URL_RE, resp.text)
     if not match:
         raise ValueError("无法提取音频链接，请检查链接是否正确")
     print("[解析] 直链获取成功 (xyzdownloader)")
@@ -77,7 +81,9 @@ def download_audio(xiaoyuzhou_url, out_dir):
     """解析并下载音频, 返回 (音频路径, 标题)"""
     import requests
     audio_link, title = resolve_audio_url(xiaoyuzhou_url)
-    audio_path = os.path.join(out_dir, "episode.m4a")
+    # v1.1: 按真实扩展名保存 (.mp3 / .m4a)
+    ext = '.mp3' if audio_link.split('?')[0].lower().endswith('.mp3') else '.m4a'
+    audio_path = os.path.join(out_dir, "episode" + ext)
     r = requests.get(audio_link, stream=True, timeout=180,
                      headers={'User-Agent': 'Mozilla/5.0'})
     r.raise_for_status()
@@ -85,7 +91,7 @@ def download_audio(xiaoyuzhou_url, out_dir):
         for chunk in r.iter_content(chunk_size=8192):
             f.write(chunk)
     size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-    print("[下载] 完成: {:.1f}MB".format(size_mb))
+    print("[下载] 完成: {:.1f}MB -> {}".format(size_mb, audio_path))
     return audio_path, title
 
 
@@ -104,7 +110,7 @@ def preload_model(model_size):
 
 
 def split_audio(m4a_path, out_dir):
-    """直接从M4A切分为15分钟段 (不生成中间WAV大文件)"""
+    """直接从源音频切分为15分钟段 (不生成中间WAV大文件)"""
     print("\n[切分] 音频预处理...")
     seg_dir = os.path.join(out_dir, "segments")
     os.makedirs(seg_dir, exist_ok=True)
